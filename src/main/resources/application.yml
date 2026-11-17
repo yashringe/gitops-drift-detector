@@ -1,0 +1,21 @@
+# Defaults for CLI mode: no web server, just run the check and exit.
+spring:
+  application:
+    name: gitops-drift-detector
+  main:
+    web-application-type: none
+    banner-mode: off
+
+drift:
+  mode: cli
+  default-namespace: default
+  format: markdown
+  interval: 5m
+  # ignore-fields:
+  #   - spec.replicas          # when a HorizontalPodAutoscaler owns the replica count
+  # managed-by-label: app.kubernetes.io/managed-by=gitops
+
+logging:
+  level:
+    root: WARN
+    io.github.yashringe: INFO

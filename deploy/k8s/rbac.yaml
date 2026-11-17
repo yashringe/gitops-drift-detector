@@ -1,0 +1,30 @@
+# Read-only access. The detector never changes the cluster.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: drift-detector
+  namespace: drift-detector
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: drift-detector-read
+rules:
+  - apiGroups: ["", "apps", "batch", "networking.k8s.io", "rbac.authorization.k8s.io", "autoscaling", "policy"]
+    resources: ["*"]
+    verbs: ["get", "list"]
+  # Secrets are left out on purpose. Add them only if your Git repo manages Secrets
+  # (values are always redacted in the report).
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: drift-detector-read
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: drift-detector-read
+subjects:
+  - kind: ServiceAccount
+    name: drift-detector
+    namespace: drift-detector

@@ -1,0 +1,22 @@
+# Activated with --spring.profiles.active=server: long-running, checks every drift.interval,
+# exposes /api/drift and Prometheus metrics at /actuator/prometheus.
+spring:
+  main:
+    web-application-type: servlet
+
+drift:
+  mode: server
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+logging:
+  level:
+    root: INFO

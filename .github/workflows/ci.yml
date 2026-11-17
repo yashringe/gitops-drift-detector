@@ -1,0 +1,109 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Build and test
+        run: mvn -B verify
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: target/surefire-reports/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-jar
+          path: target/gitops-drift-detector-*.jar
+      - name: Build Docker image
+        run: docker build -t gitops-drift-detector:${{ github.sha }} .
+
+  # Real cluster test: apply the examples to a throwaway kind cluster, check that a fresh
+  # deployment shows no drift, change the cluster by hand, and check that exactly those
+  # changes are reported.
+  e2e-kind:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write   # to post the report as a PR comment
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/download-artifact@v4
+        with:
+          name: app-jar
+          path: dist
+      - name: Create kind cluster
+        uses: helm/kind-action@v1
+
+      - name: Apply example manifests
+        run: |
+          kubectl apply -f examples/k8s/00-namespace.yaml
+          kubectl apply -f examples/k8s/
+          kubectl -n demo rollout status deployment/web --timeout=120s
+
+      - name: Freshly applied cluster must be in sync (exit code 0)
+        run: |
+          java -jar dist/gitops-drift-detector-*.jar \
+            --drift.manifests=examples/k8s \
+            --drift.managed-by-label=app.kubernetes.io/managed-by=gitops \
+            --drift.output=in-sync.md
+          cat in-sync.md
+
+      - name: Change the cluster by hand
+        run: |
+          kubectl -n demo scale deployment web --replicas=4
+          kubectl -n demo patch configmap web-config --type merge -p '{"data":{"GREETING":"hallo"}}'
+          kubectl -n demo delete service web
+          kubectl -n demo create configmap manual-hotfix --from-literal=FLAG=on
+          kubectl -n demo label configmap manual-hotfix app.kubernetes.io/managed-by=gitops
+
+      - name: Drift must be detected (exit code 1)
+        run: |
+          set +e
+          java -jar dist/gitops-drift-detector-*.jar \
+            --drift.manifests=examples/k8s \
+            --drift.managed-by-label=app.kubernetes.io/managed-by=gitops \
+            --drift.output=drift-report.md
+          code=$?
+          set -e
+          cat drift-report.md
+          cat drift-report.md >> "$GITHUB_STEP_SUMMARY"
+          test "$code" -eq 1
+          grep -q '| `spec.replicas` | `2` | `4` |' drift-report.md
+          grep -q '| `data.GREETING` | `hello` | `hallo` |' drift-report.md
+          grep -q 'v1 Service demo/web' drift-report.md
+          grep -q 'v1 ConfigMap demo/manual-hotfix' drift-report.md
+
+      - name: JSON output is machine-readable
+        run: |
+          java -jar dist/gitops-drift-detector-*.jar --drift.manifests=examples/k8s --drift.format=json \
+            --drift.output=drift-report.json || true
+          jq -e '.summary.DRIFTED == 2 and .summary.MISSING == 1' drift-report.json
+
+      - name: Post report on the pull request
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment ${{ github.event.pull_request.number }} --body-file drift-report.md --edit-last \
+            || gh pr comment ${{ github.event.pull_request.number }} --body-file drift-report.md

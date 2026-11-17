@@ -1,0 +1,26 @@
+# Example PrometheusRule (Prometheus Operator). Fires when the cluster has differed from Git
+# for 15 minutes, which gives a normal rollout time to finish first.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: gitops-drift
+  namespace: drift-detector
+spec:
+  groups:
+    - name: gitops-drift
+      rules:
+        - alert: GitOpsDriftDetected
+          expr: sum(gitops_drift_objects{status=~"drifted|missing|not_in_git"}) > 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Cluster differs from Git"
+            description: "{{ $value }} objects differ from their manifests. See /api/drift.md on the drift-detector service."
+        - alert: GitOpsDriftCheckStale
+          expr: time() - gitops_drift_last_success_seconds > 1800
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Drift detector has not completed a check for 30 minutes"
